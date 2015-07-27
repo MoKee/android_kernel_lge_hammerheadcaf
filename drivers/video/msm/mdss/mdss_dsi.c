@@ -31,6 +31,9 @@
 #include "mdss_dsi.h"
 #include "mdss_debug.h"
 
+static int mdss_dsi_pinctrl_set_state(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
+					bool active);
+
 static int mdss_dsi_regulator_init(struct platform_device *pdev)
 {
 	int rc = 0;
@@ -81,6 +84,9 @@ static int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
 		pr_warn("%s: Panel reset failed. rc=%d\n", __func__, ret);
 		ret = 0;
 	}
+
+	if (mdss_dsi_pinctrl_set_state(ctrl_pdata, false))
+		pr_debug("reset disable: pinctrl not enabled\n");
 
 	for (i = DSI_MAX_PM - 1; i >= 0; i--) {
 		/*
@@ -142,6 +148,8 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 	 */
 	if (pdata->panel_info.cont_splash_enabled ||
 		!pdata->panel_info.mipi.lp11_init) {
+		if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
+			pr_debug("reset enable: pinctrl not enabled\n");
 
 		ret = mdss_dsi_panel_reset(pdata, 1);
 		if (ret)
@@ -159,17 +167,62 @@ error:
 	return ret;
 }
 
-static int mdss_dsi_panel_power_doze(struct mdss_panel_data *pdata, int enable)
+static int mdss_dsi_panel_power_lp(struct mdss_panel_data *pdata, int enable)
 {
-	/* Panel power control when entering/exiting doze mode */
+	/* Panel power control when entering/exiting lp mode */
 	return 0;
 }
 
-static int mdss_dsi_panel_power_ctrl(struct mdss_panel_data *pdata,
-	int power_state)
+static int mdss_dsi_panel_power_ulp(struct mdss_panel_data *pdata,
+	int enable)
 {
-	int ret;
+	int ret = 0, i;
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+	u32 mode = enable ? DSS_REG_MODE_ULP : DSS_REG_MODE_ENABLE;
+
+	pr_debug("%s: +\n", __func__);
+	if (pdata == NULL) {
+		pr_err("%s: Invalid input data\n", __func__);
+		return -EINVAL;
+	}
+
+	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
+				panel_data);
+
+	for (i = 0; i < DSI_MAX_PM; i++) {
+		/*
+		 * Core power module need to be controlled along with
+		 * DSI core clocks.
+		 */
+		if (DSI_CORE_PM == i)
+			continue;
+		ret = msm_dss_config_vreg_opt_mode(
+			ctrl_pdata->power_data[i].vreg_config,
+			ctrl_pdata->power_data[i].num_vreg, mode);
+		if (ret) {
+			pr_err("%s: failed to config lp opt mode for %s.rc=%d\n",
+				__func__, __mdss_dsi_pm_name(i), ret);
+			goto error;
+		}
+	}
+
+error:
+	if (ret) {
+		mode = enable ? DSS_REG_MODE_ENABLE : DSS_REG_MODE_ULP;
+		for (; i >= 0; i--)
+			msm_dss_config_vreg_opt_mode(
+				ctrl_pdata->power_data[i].vreg_config,
+				ctrl_pdata->power_data[i].num_vreg, mode);
+	}
+	pr_debug("%s: -\n", __func__);
+	return ret;
+}
+
+int mdss_dsi_panel_power_ctrl(struct mdss_panel_data *pdata, int power_state)
+{
+	int ret = 0;
 	struct mdss_panel_info *pinfo;
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -177,13 +230,17 @@ static int mdss_dsi_panel_power_ctrl(struct mdss_panel_data *pdata,
 	}
 
 	pinfo = &pdata->panel_info;
-	pr_debug("%s: cur_power_state=%d req_power_state=%d\n", __func__,
+	pr_debug("%pS-->%s: cur_power_state=%d req_power_state=%d\n",
+		__builtin_return_address(0), __func__,
 		pinfo->panel_power_state, power_state);
 
 	if (pinfo->panel_power_state == power_state) {
 		pr_debug("%s: no change needed\n", __func__);
 		return 0;
 	}
+
+	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
+				panel_data);
 
 	/*
 	 * If a dynamic mode switch is pending, the regulators should not
@@ -197,13 +254,29 @@ static int mdss_dsi_panel_power_ctrl(struct mdss_panel_data *pdata,
 		ret = mdss_dsi_panel_power_off(pdata);
 		break;
 	case MDSS_PANEL_POWER_ON:
-		if (mdss_dsi_is_panel_on_lp(pdata))
-			ret = mdss_dsi_panel_power_doze(pdata, false);
+		if (mdss_dsi_is_panel_on_ulp(pdata))
+			ret = mdss_dsi_panel_power_ulp(pdata, false);
+		else if (mdss_dsi_is_panel_on_lp(pdata))
+			ret = mdss_dsi_panel_power_lp(pdata, false);
 		else
 			ret = mdss_dsi_panel_power_on(pdata);
 		break;
-	case MDSS_PANEL_POWER_DOZE:
-		ret = mdss_dsi_panel_power_doze(pdata, true);
+	case MDSS_PANEL_POWER_LP1:
+		if (mdss_dsi_is_panel_on_ulp(pdata))
+			ret = mdss_dsi_panel_power_ulp(pdata, false);
+		else
+			ret = mdss_dsi_panel_power_lp(pdata, true);
+		/*
+		 * temp workaround until framework issues pertaining to LP2
+		 * power state transitions are fixed. For now, we internally
+		 * transition to LP2 state whenever core power is turned off
+		 * in LP1 state
+		 */
+	case MDSS_PANEL_POWER_LP2:
+		if (!ctrl_pdata->core_power) {
+			power_state = MDSS_PANEL_POWER_LP2;
+			ret = mdss_dsi_panel_power_ulp(pdata, true);
+		}
 		break;
 	default:
 		pr_err("%s: unknown panel power state requested (%d)\n",
@@ -316,7 +389,7 @@ static int mdss_dsi_get_dt_vreg_data(struct device *dev,
 				__func__, rc);
 			goto error;
 		}
-		mp->vreg_config[i].enable_load = tmp;
+		mp->vreg_config[i].load[DSS_REG_MODE_ENABLE] = tmp;
 
 		/* disable-load */
 		rc = of_property_read_u32(supply_node,
@@ -326,7 +399,20 @@ static int mdss_dsi_get_dt_vreg_data(struct device *dev,
 				__func__, rc);
 			goto error;
 		}
-		mp->vreg_config[i].disable_load = tmp;
+		mp->vreg_config[i].load[DSS_REG_MODE_DISABLE] = tmp;
+
+		/* ulp-load */
+		rc = of_property_read_u32(supply_node,
+			"qcom,supply-ulp-load", &tmp);
+		if (rc) {
+			pr_debug("%s: error reading disable load. rc=%d\n",
+				__func__, rc);
+			rc = 0;
+		} else {
+			pr_debug("%s: ulp_load for %s=%d\n", __func__,
+				mp->vreg_config[i].vreg_name, tmp);
+			mp->vreg_config[i].load[DSS_REG_MODE_ULP] = tmp;
+		}
 
 		/* pre-sleep */
 		rc = of_property_read_u32(supply_node,
@@ -375,8 +461,8 @@ static int mdss_dsi_get_dt_vreg_data(struct device *dev,
 			mp->vreg_config[i].vreg_name,
 			mp->vreg_config[i].min_voltage,
 			mp->vreg_config[i].max_voltage,
-			mp->vreg_config[i].enable_load,
-			mp->vreg_config[i].disable_load,
+			mp->vreg_config[i].load[DSS_REG_MODE_ENABLE],
+			mp->vreg_config[i].load[DSS_REG_MODE_DISABLE],
 			mp->vreg_config[i].pre_on_sleep,
 			mp->vreg_config[i].post_on_sleep,
 			mp->vreg_config[i].pre_off_sleep,
@@ -447,7 +533,7 @@ static int mdss_dsi_off(struct mdss_panel_data *pdata, int power_state)
 		goto end;
 	}
 
-	if (power_state != MDSS_PANEL_POWER_OFF) {
+	if (mdss_panel_is_power_on(power_state)) {
 		pr_debug("%s: dsi_off with panel always on\n", __func__);
 		goto panel_power_ctrl;
 	}
@@ -565,8 +651,11 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 	 * Issue hardware reset line after enabling the DSI clocks and data
 	 * data lanes for LP11 init
 	 */
-	if (mipi->lp11_init)
+	if (mipi->lp11_init) {
+		if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
+			pr_debug("reset enable: pinctrl not enabled\n");
 		mdss_dsi_panel_reset(pdata, 1);
+	}
 
 	if (mipi->init_delay)
 		usleep(mipi->init_delay);
@@ -586,6 +675,59 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 exit:
 	pr_debug("%s-:\n", __func__);
 	return ret;
+}
+
+static int mdss_dsi_pinctrl_set_state(
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata,	
+		bool active)
+{
+	struct pinctrl_state *pin_state;
+	int rc = -EFAULT;
+
+	if (IS_ERR_OR_NULL(ctrl_pdata->pin_res.pinctrl))
+		return PTR_ERR(ctrl_pdata->pin_res.pinctrl);
+
+	pin_state = active ? ctrl_pdata->pin_res.gpio_state_active
+			: ctrl_pdata->pin_res.gpio_state_suspend;
+	if (!IS_ERR_OR_NULL(pin_state)) {
+		rc = pinctrl_select_state(ctrl_pdata->pin_res.pinctrl,
+				pin_state);
+		if (rc)
+			pr_err("%s: can not set %s pins\n", __func__,
+			 	active ? MDSS_PINCTRL_STATE_DEFAULT
+			 	: MDSS_PINCTRL_STATE_SLEEP);
+	} else {
+	pr_err("%s: invalid '%s' pinstate\n", __func__,
+		active ? MDSS_PINCTRL_STATE_DEFAULT
+		: MDSS_PINCTRL_STATE_SLEEP);
+}
+return rc;
+}
+
+static int mdss_dsi_pinctrl_init(struct platform_device *pdev)
+{
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata;	
+
+	ctrl_pdata = platform_get_drvdata(pdev);
+	ctrl_pdata->pin_res.pinctrl = devm_pinctrl_get(&pdev->dev);
+	if (IS_ERR_OR_NULL(ctrl_pdata->pin_res.pinctrl)) {
+		pr_err("%s: failed to get pinctrl\n", __func__);
+		return PTR_ERR(ctrl_pdata->pin_res.pinctrl);
+	}
+
+	ctrl_pdata->pin_res.gpio_state_active
+		= pinctrl_lookup_state(ctrl_pdata->pin_res.pinctrl,
+				MDSS_PINCTRL_STATE_DEFAULT);
+	if (IS_ERR_OR_NULL(ctrl_pdata->pin_res.gpio_state_active))
+		pr_warn("%s: can not get default pinstate\n", __func__);
+
+	ctrl_pdata->pin_res.gpio_state_suspend
+		= pinctrl_lookup_state(ctrl_pdata->pin_res.pinctrl,
+			MDSS_PINCTRL_STATE_SLEEP);
+	if (IS_ERR_OR_NULL(ctrl_pdata->pin_res.gpio_state_suspend))
+		pr_warn("%s: can not get sleep pinstate\n", __func__);
+
+	return 0;
 }
 
 static int mdss_dsi_unblank(struct mdss_panel_data *pdata)
@@ -658,7 +800,7 @@ static int mdss_dsi_blank(struct mdss_panel_data *pdata, int power_state)
 
 	mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 1);
 
-	if (power_state == MDSS_PANEL_POWER_DOZE) {
+	if (mdss_panel_is_power_on_lp(power_state)) {
 		pr_debug("%s: low power state requested\n", __func__);
 		if (ctrl_pdata->low_power_config)
 			ret = ctrl_pdata->low_power_config(pdata, true);
@@ -766,7 +908,7 @@ static int mdss_dsi_dfps_config(struct mdss_panel_data *pdata, int new_fps)
 			vsync_period =
 				mdss_panel_get_vtotal(&pdata->panel_info);
 			hsync_period =
-				mdss_panel_get_htotal(&pdata->panel_info);
+				mdss_panel_get_htotal(&pdata->panel_info, true);
 			current_dsi_v_total =
 				MIPI_INP((ctrl_pdata->ctrl_base) + 0x2C);
 			new_dsi_v_total =
@@ -1120,6 +1262,10 @@ static int __devinit mdss_dsi_ctrl_probe(struct platform_device *pdev)
 		goto error_no_mem;
 	}
 
+	rc = mdss_dsi_pinctrl_init(pdev);
+	if (rc)
+		pr_warn("%s: failed to get pin resources\n", __func__);
+
 	/* Parse the regulator information */
 	for (i = 0; i < DSI_MAX_PM; i++) {
 		rc = mdss_dsi_get_dt_vreg_data(&pdev->dev,
@@ -1323,11 +1469,15 @@ int dsi_panel_device_register(struct device_node *pan_node,
 	pinfo->mipi.dsi_phy_db.strength[0] = data[0];
 	pinfo->mipi.dsi_phy_db.strength[1] = data[1];
 
+	pinfo->mipi.dsi_phy_db.reg_ldo_mode = of_property_read_bool(
+		ctrl_pdev->dev.of_node, "qcom,regulator-ldo-mode");
+
 	data = of_get_property(pan_node,
 		"qcom,mdss-dsi-regulator-settings", &len);
 	if (!data)
 		data = of_get_property(ctrl_pdev->dev.of_node,
 			"qcom,platform-regulator-settings", &len);
+
 	if ((!data) || (len != 7)) {
 		pr_err("%s:%d, Unable to read Phy regulator settings",
 			__func__, __LINE__);

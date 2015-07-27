@@ -30,6 +30,9 @@
 
 #define MAX_DRV_SUP_MMB_BLKS	44
 
+#define MDSS_PINCTRL_STATE_DEFAULT "mdss_default"
+#define MDSS_PINCTRL_STATE_SLEEP  "mdss_sleep"
+
 enum mdss_mdp_clk_type {
 	MDSS_CLK_AHB,
 	MDSS_CLK_AXI,
@@ -141,6 +144,8 @@ struct mdss_data_type {
 	u8 fs_ena;
 	u8 vsync_ena;
 	unsigned long min_mdp_clk;
+
+	struct notifier_block gdsc_cb;
 
 	u32 res_init;
 

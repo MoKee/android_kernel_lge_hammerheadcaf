@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,6 +20,7 @@
 #include "mdss_panel.h"
 #include "mdss_io_util.h"
 #include "mdss_dsi_cmd.h"
+#include <linux/pinctrl/consumer.h>
 
 #define MMSS_SERDES_BASE_PHY 0x04f01000 /* mmss (De)Serializer CFG */
 
@@ -47,6 +48,15 @@
 #define MIPI_DSI_PANEL_WUXGA	7
 #define MIPI_DSI_PANEL_720P_PT	8
 #define DSI_PANEL_MAX	8
+
+#define MDSS_DSI_HW_REV_100             0x10000000      /* 8974    */
+#define MDSS_DSI_HW_REV_100_1           0x10000001      /* 8x26    */
+#define MDSS_DSI_HW_REV_100_2           0x10000002      /* 8x26v2  */
+#define MDSS_DSI_HW_REV_101             0x10010000      /* 8974v2  */
+#define MDSS_DSI_HW_REV_101_1           0x10010001      /* 8974Pro */
+#define MDSS_DSI_HW_REV_102             0x10020000      /* 8084    */
+#define MDSS_DSI_HW_REV_103             0x10030000      /* 8994    */
+#define MDSS_DSI_HW_REV_103_1           0x10030001      /* 8916/8936 */
 
 enum {		/* mipi dsi panel */
 	DSI_VIDEO_MODE,
@@ -230,6 +240,12 @@ struct dsi_drv_cm_data {
 	int broadcast_enable;
 };
 
+struct dsi_pinctrl_res {
+	struct pinctrl *pinctrl;
+	struct pinctrl_state *gpio_state_active;
+	struct pinctrl_state *gpio_state_suspend;
+};
+
 enum {
 	DSI_CTRL_0,
 	DSI_CTRL_1,
@@ -326,6 +342,8 @@ struct mdss_dsi_ctrl_pdata {
 	struct dsi_buf rx_buf;
 	struct dsi_buf status_buf;
 	int status_mode;
+
+	struct dsi_pinctrl_res pin_res;
 };
 
 struct dsi_status_data {
@@ -389,6 +407,7 @@ bool __mdss_dsi_clk_enabled(struct mdss_dsi_ctrl_pdata *ctrl, u8 clk_type);
 void mdss_dsi_reset(struct mdss_dsi_ctrl_pdata *ctrl);
 void mdss_dsi_ctrl_setup(struct mdss_dsi_ctrl_pdata *ctrl);
 void mdss_dsi_dln0_phy_err(struct mdss_dsi_ctrl_pdata *ctrl);
+int mdss_dsi_panel_power_ctrl(struct mdss_panel_data *pdata, int power_state);
 
 int mdss_dsi_panel_init(struct device_node *node,
 		struct mdss_dsi_ctrl_pdata *ctrl_pdata,
@@ -483,6 +502,11 @@ static inline bool mdss_dsi_is_panel_on_interactive(
 static inline bool mdss_dsi_is_panel_on_lp(struct mdss_panel_data *pdata)
 {
 	return mdss_panel_is_power_on_lp(pdata->panel_info.panel_power_state);
+}
+
+static inline bool mdss_dsi_is_panel_on_ulp(struct mdss_panel_data *pdata)
+{
+	return mdss_panel_is_power_on_ulp(pdata->panel_info.panel_power_state);
 }
 
 static inline bool mdss_dsi_ulps_feature_enabled(
