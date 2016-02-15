@@ -262,7 +262,8 @@ config ARCH_MSM8974
 	select MULTI_IRQ_HANDLER
 	select MSM_MULTIMEDIA_USE_ION
 	select PM_DEVFREQ
-	select MSM_DEVFREQ_CPUBW
+	select MSM_DEVFREQ_DEVBW
+	select DEVFREQ_SIMPLE_DEV
 	select MSM_PIL
 	select MSM_SPM_V2
 	select MSM_L2_SPM
@@ -313,7 +314,8 @@ config ARCH_APQ8084
 	select MSM_L2_SPM
 	select MSM_RPM_SMD
 	select PM_DEVFREQ
-	select MSM_DEVFREQ_CPUBW
+	select MSM_DEVFREQ_DEVBW
+	select DEVFREQ_SIMPLE_DEV
 	select ENABLE_VMALLOC_SAVINGS
 
 config ARCH_MPQ8092
@@ -340,6 +342,8 @@ config ARCH_FSM9900
 	select MSM_GPIOMUX
 	select MULTI_IRQ_HANDLER
 	select PM_DEVFREQ
+	select MSM_DEVFREQ_DEVBW
+	select DEVFREQ_SIMPLE_DEV
 	select MSM_PIL
 	select MSM_NATIVE_RESTART
 	select MSM_RESTART_V2
@@ -475,7 +479,7 @@ config ARCH_MSM8610
 	select CPU_FREQ_MSM
 	select CPU_FREQ
 	select PM_DEVFREQ
-	select MSM_DEVFREQ_CPUBW
+	select MSM_DEVFREQ_DEVBW
 	select MSM_PIL
 	select MSM_RUN_QUEUE_STATS
 	select ARM_HAS_SG_CHAIN
@@ -517,7 +521,7 @@ config ARCH_MSM8226
 	select CPU_FREQ_MSM
 	select CPU_FREQ
 	select PM_DEVFREQ
-	select MSM_DEVFREQ_CPUBW
+	select MSM_DEVFREQ_DEVBW
 	select MSM_PIL
 	select MSM_RUN_QUEUE_STATS
 	select ARM_HAS_SG_CHAIN
@@ -1853,20 +1857,6 @@ config MSM_DALRPC_TEST
 	default m
 	help
 	  Exercises DAL RPC calls to QDSP6.
-
-config MSM_DEVFREQ_CPUBW
-	bool "Devfreq device for CPU<->DDR IB/AB BW voting"
-	depends on PM_DEVFREQ
-	select DEVFREQ_GOV_PERFORMANCE
-	select DEVFREQ_GOV_POWERSAVE
-	select DEVFREQ_GOV_USERSPACE
-	select DEVFREQ_GOV_MSM_CPUFREQ
-	default n
-	help
-	  Different devfreq governors use this devfreq device to make CPU to
-	  DDR IB/AB bandwidth votes. This driver provides a SoC topology
-	  agnostic interface to so that some of the devfreq governors can be
-	  shared across SoCs.
 
 config MSM_AVS_HW
 	bool "Enable Adaptive Voltage Scaling (AVS)"
