@@ -37,6 +37,8 @@ struct msm_vidc_drv *vidc_driver;
 
 uint32_t msm_vidc_pwr_collapse_delay = 10000;
 
+uint32_t pm_qos_latency_us = 501;
+
 static inline struct msm_vidc_inst *get_vidc_inst(struct file *filp, void *fh)
 {
 	return container_of(filp->private_data,
@@ -60,9 +62,25 @@ static int msm_v4l2_open(struct file *filp)
 	}
 
 	if (!pm_qos_request_active(&vidc_inst->pm_qos)) {
-		dprintk(VIDC_DBG, "pm_qos_add with latency 332usec\n");
+		dprintk(VIDC_DBG, "pm_qos_add with latency %u usec\n",
+				pm_qos_latency_us);
+
+		/*
+		 * The default request type PM_QOS_REQ_ALL_CORES is
+		 * applicable to all CPU cores that are online and
+		 * would have a power impact when there are more
+		 * number of CPUs. PM_QOS_REQ_AFFINE_IRQ request
+		 * type shall update/apply the vote only to that CPU to
+		 * which IRQ's affinity is set to.
+		 */
+#ifdef CONFIG_SMP
+
+		vidc_inst->pm_qos.type = PM_QOS_REQ_AFFINE_IRQ;
+		vidc_inst->pm_qos.irq = core->resources.irq;
+
+#endif
 		pm_qos_add_request(&vidc_inst->pm_qos,
-				PM_QOS_CPU_DMA_LATENCY, 332);
+				PM_QOS_CPU_DMA_LATENCY, pm_qos_latency_us);
 	}
 
 	clear_bit(V4L2_FL_USES_V4L2_FH, &vdev->flags);
